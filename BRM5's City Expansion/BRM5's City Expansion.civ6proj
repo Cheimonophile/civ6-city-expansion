@@ -1,0 +1,38 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="12.0" DefaultTargets="Default" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Default</Configuration>
+    <Name>BRM5's City Expansion</Name>
+    <Guid>381a55b7-d543-4633-86f1-e36d3a257fb1</Guid>
+    <ProjectGuid>d6c3c0a1-05bb-4e1c-a31d-bb3627d243f2</ProjectGuid>
+    <ModVersion>1</ModVersion>
+    <Teaser>Changes the order of the tiles that cities will expand to in Civ 6.</Teaser>
+    <Description>Changes the order of the tiles that cities will expand to in Civ 6.</Description>
+    <Authors>Ben</Authors>
+    <SpecialThanks>
+    </SpecialThanks>
+    <AffectsSavedGames>true</AffectsSavedGames>
+    <SupportsSinglePlayer>true</SupportsSinglePlayer>
+    <SupportsMultiplayer>true</SupportsMultiplayer>
+    <SupportsHotSeat>true</SupportsHotSeat>
+    <CompatibleVersions>1.2,2.0</CompatibleVersions>
+    <AssociationData><![CDATA[<Associations>
+  <Dependency type="Dlc" title="Expansion: Gathering Storm" id="4873eb62-8ccc-4574-b784-dda455e74e68" />
+</Associations>]]></AssociationData>
+    <AssemblyName>BRM5's City Expansion</AssemblyName>
+    <RootNamespace>BRM5's City Expansion</RootNamespace>
+    <InGameActionData><![CDATA[<InGameActions><AddGameplayScripts id="Script"><File priority="-1">CityExpansion.lua</File></AddGameplayScripts></InGameActions>]]></InGameActionData>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)' == 'Default' ">
+    <OutputPath>.</OutputPath>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Include="BRM5_s_City_Expansion.Art.xml" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="CityExpansion.lua">
+      <SubType>Content</SubType>
+    </Content>
+  </ItemGroup>
+  <Import Project="$(MSBuildLocalExtensionPath)Civ6.targets" />
+</Project>
