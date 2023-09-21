@@ -15,6 +15,11 @@ function getCityPermanentID (playerID, cityID)
 	return cityPermanentID
 end
 
+-- Expand a city by one tile
+function ExpandCity (playerID, cityID)
+	local cityPlots = CityManager.GetCity(playerID, cityID):GetOwnedPlots()
+end
+
 
 -- claim a tile for a city every time the city expandss
 Events.CityPopulationChanged.Add(function (playerID, cityID, cityPopulation)
@@ -26,6 +31,10 @@ Events.CityPopulationChanged.Add(function (playerID, cityID, cityPopulation)
 	if cityPopDifference > 0 then
 		CityMaxPopulations[cityPermanentID] = cityPopulation
 		print("Increased "..CityManager.GetCity(playerID, cityID):GetName().." to "..tostring(cityPopulation).." from "..tostring(oldCityPop))
+		while cityPopDifference > 0 do
+			print("cityPopDifference",cityPopDifference)
+			cityPopDifference = cityPopDifference - 1
+		end
 	end
 end)
 
