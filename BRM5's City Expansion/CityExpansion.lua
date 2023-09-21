@@ -16,13 +16,22 @@ end
 
 -- Expand a city by one tile
 function ExpandCity (playerID, cityID)
-	local cityPlots = CityManager.GetCity(playerID, cityID):GetOwnedPlots()
+
+	-- find the max score plot
+	local maxX, maxY, maxScore = nil, nil, 0
+
+	local city = CityManager.GetCity(playerID, cityID)
+	local cityPlots = city:GetOwnedPlots()
 	for iCityPlot, vCityPlot in ipairs(cityPlots) do
 		local cityPlotX, cityPlotY = vCityPlot:GetX(), vCityPlot:GetY()
 		local adjacentPlots = Map.GetAdjacentPlots(cityPlotX, cityPlotY)
 		for iAdjPlot, vAdjPlot in ipairs(adjacentPlots) do
 			local adjPlotIsOcean = vAdjPlot:IsWater() and not vAdjPlot:IsShallowWater()
-			print("Plots",adjPlotIsOcean, vAdjPlot:IsOwned())
+			local adjPlotIsOwned = vAdjPlot:IsOwned()
+			if not adjPlotIsOcean and not adjPlotIsOwned then
+				print("Plots",adjPlotIsOcean, adjPlotIsOwned)
+			end
+			
 		end
 	end
 end
