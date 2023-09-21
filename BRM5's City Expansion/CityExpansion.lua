@@ -57,6 +57,10 @@ function ExpandCity (playerID, cityID)
 	end
 
 	-- expand the city to the tile
+	print("Expansion", maxX, maxY, maxScore)
+	if maxX ~= nil and maxY ~= nil then
+		WorldBuilder.CityManager():SetPlotOwner(maxX, maxY, playerID, cityID)
+	end
 end
 
 
