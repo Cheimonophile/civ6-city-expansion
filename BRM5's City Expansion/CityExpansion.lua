@@ -29,11 +29,34 @@ function ExpandCity (playerID, cityID)
 			local adjPlotIsOcean = vAdjPlot:IsWater() and not vAdjPlot:IsShallowWater()
 			local adjPlotIsOwned = vAdjPlot:IsOwned()
 			if not adjPlotIsOcean and not adjPlotIsOwned then
-				print("Plots",adjPlotIsOcean, adjPlotIsOwned)
+
+				-- calculate raw score
+				local score_num = 1
+				local score_den = 1
+				score_num = score_num + (vAdjPlot:IsFreshWater() and 1 or 0) -- *+1 for fresh water
+				score_num = score_num + (vAdjPlot:IsNaturalWonder() and 1 or 0) -- *+1 for natural wonder
+				score_num = score_num + (vAdjPlot:GetResourceType() >= 0 and 1 or 0) -- *+1 for resource
+				score_den = score_den + (vAdjPlot:IsImpassable() and 1 or 0) -- /+1 for impassable
+				local score = score_num / score_den
+
+				-- do distance calculations
+				local distance_multiplier = 0
+				local playerCities = PlayerManager.GetPlayer(city:GetOwner()):GetCities()
+				for iPlayerCity, vPlayerCity in playerCities:Members() do
+					distance_multiplier = distance_multiplier + 1 / Map.GetPlotDistance(vAdjPlot:GetX(), vAdjPlot:GetY(), vPlayerCity:GetX(), vPlayerCity:GetY())
+				end
+				score = score * distance_multiplier -- /+x for distance from city
+				print("Score", score)
+
+				-- update the tile
+				if score > maxScore then
+					maxX, maxY, maxScore = vAdjPlot:GetX(), vAdjPlot:GetY(), score
+				end
 			end
-			
 		end
 	end
+
+	-- expand the city to the tile
 end
 
 
