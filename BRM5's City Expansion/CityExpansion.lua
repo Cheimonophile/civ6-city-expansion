@@ -3,7 +3,6 @@
 -- DateCreated: 9/19/2023 7:13:55 PM
 --------------------------------------------------------------
 
-
 -- Mod Data Storage
 CityMaxPopulations = {}
 
@@ -18,9 +17,13 @@ end
 -- Expand a city by one tile
 function ExpandCity (playerID, cityID)
 	local cityPlots = CityManager.GetCity(playerID, cityID):GetOwnedPlots()
-	print(cityPlots)
 	for iCityPlot, vCityPlot in ipairs(cityPlots) do
-		print("Plots",iCityPlot,vCityPlot)
+		local cityPlotX, cityPlotY = vCityPlot:GetX(), vCityPlot:GetY()
+		local adjacentPlots = Map.GetAdjacentPlots(cityPlotX, cityPlotY)
+		for iAdjPlot, vAdjPlot in ipairs(adjacentPlots) do
+			local adjPlotIsOcean = vAdjPlot:IsWater() and not vAdjPlot:IsShallowWater()
+			print("Plots",adjPlotIsOcean, vAdjPlot:IsOwned())
+		end
 	end
 end
 
