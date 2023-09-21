@@ -18,6 +18,10 @@ end
 -- Expand a city by one tile
 function ExpandCity (playerID, cityID)
 	local cityPlots = CityManager.GetCity(playerID, cityID):GetOwnedPlots()
+	print(cityPlots)
+	for iCityPlot, vCityPlot in ipairs(cityPlots) do
+		print("Plots",iCityPlot,vCityPlot)
+	end
 end
 
 
@@ -32,7 +36,7 @@ Events.CityPopulationChanged.Add(function (playerID, cityID, cityPopulation)
 		CityMaxPopulations[cityPermanentID] = cityPopulation
 		print("Increased "..CityManager.GetCity(playerID, cityID):GetName().." to "..tostring(cityPopulation).." from "..tostring(oldCityPop))
 		while cityPopDifference > 0 do
-			print("cityPopDifference",cityPopDifference)
+			ExpandCity(playerID, cityID)
 			cityPopDifference = cityPopDifference - 1
 		end
 	end
