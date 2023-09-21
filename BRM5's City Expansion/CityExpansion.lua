@@ -18,23 +18,24 @@ end
 
 -- claim a tile for a city every time the city expandss
 Events.CityPopulationChanged.Add(function (playerID, cityID, cityPopulation)
-	print("BRM5:OnCityPopulationChanged", playerID, cityID, cityPopulation)
 
 	-- Get City Coordinate ID
 	local cityPermanentID = getCityPermanentID(playerID, cityID)
-
-	print(cityPermanentID)
+	local oldCityPop = CityMaxPopulations[cityPermanentID]
+	local cityPopDifference = cityPopulation - oldCityPop
+	if cityPopDifference > 0 then
+		CityMaxPopulations[cityPermanentID] = cityPopulation
+		print("Increased "..CityManager.GetCity(playerID, cityID):GetName().." to "..tostring(cityPopulation).." from "..tostring(oldCityPop))
+	end
 end)
 
 
--- add a city to the populations table
+-- add a city population to the population table
 Events.CityAddedToMap.Add(function (playerID, cityID, iX, iY)
 	local cityPermanentID = getCityPermanentID(playerID, cityID)
 	local cityPop = CityManager.GetCity(playerID, cityID):GetPopulation()
-	print("CityAddedToMap", cityPermanentID, cityPop)
-	print("City Population Before", CityMaxPopulations[cityPermanentID])
-	CityMaxPopulations[cityPermanentID] = 1
-	print("City Population After", CityMaxPopulations[cityPermanentID])
+	CityMaxPopulations[cityPermanentID] = cityPop
+	print("Updated "..CityManager.GetCity(playerID, cityID):GetName().." to "..tostring(cityPop))
 end)
 
 
@@ -51,7 +52,4 @@ Events.CityTileOwnershipChanged.Add(function (owner, cityID)
 
 
 	-- TODO: If tile is land, Claim adjacent unclaimed coast tiles
-
-
-	return nil
 end)
