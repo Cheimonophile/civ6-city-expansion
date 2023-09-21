@@ -76,6 +76,7 @@ Events.CityPopulationChanged.Add(function (playerID, cityID, cityPopulation)
 		print("Increased "..CityManager.GetCity(playerID, cityID):GetName().." to "..tostring(cityPopulation).." from "..tostring(oldCityPop))
 		while cityPopDifference > 0 do
 			ExpandCity(playerID, cityID)
+			ExpandCity(playerID, cityID)
 			cityPopDifference = cityPopDifference - 1
 		end
 	end
