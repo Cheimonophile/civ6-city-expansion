@@ -39,14 +39,12 @@ function ExpandCity (playerID, cityID)
 				score_den = score_den + (vAdjPlot:IsImpassable() and 1 or 0) -- /+1 for impassable
 				local score = score_num / score_den
 
-				-- do distance calculations
-				local distance_multiplier = 0
+				-- do city distance calculations
 				local playerCities = PlayerManager.GetPlayer(city:GetOwner()):GetCities()
 				for iPlayerCity, vPlayerCity in playerCities:Members() do
-					distance_multiplier = distance_multiplier + 1 / Map.GetPlotDistance(vAdjPlot:GetX(), vAdjPlot:GetY(), vPlayerCity:GetX(), vPlayerCity:GetY())
+					local distance_multiplier = 1 + 1 / Map.GetPlotDistance(vAdjPlot:GetX(), vAdjPlot:GetY(), vPlayerCity:GetX(), vPlayerCity:GetY())
+					score = score * distance_multiplier
 				end
-				score = score * distance_multiplier -- /+x for distance from city
-				print("Score", score)
 
 				-- update the tile
 				if score > maxScore then
@@ -57,10 +55,11 @@ function ExpandCity (playerID, cityID)
 	end
 
 	-- expand the city to the tile
-	print("Expansion", maxX, maxY, maxScore)
 	if maxX ~= nil and maxY ~= nil then
+		Map.GetPlot(maxX, maxY):SetOwner(playerID)
 		WorldBuilder.CityManager():SetPlotOwner(maxX, maxY, playerID, cityID)
 	end
+	print("Expansion", maxX, maxY, maxScore)
 end
 
 
