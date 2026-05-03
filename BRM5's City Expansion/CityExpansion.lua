@@ -14,60 +14,81 @@ function getCityPermanentID (playerID, cityID)
 	return cityPermanentID
 end
 
--- Expand a city by one tile
-function ExpandCity (playerID, cityID)
-
-	-- find the max score plot
-	local maxX, maxY, maxScore = nil, nil, 0
-
+-- BFS from the city center through any plot owned by this player. Returns
+-- the list of unowned non-ocean plots bordering that walk — the city's
+-- expansion frontier.
+function GetCityFrontierPlots (playerID, cityID)
 	local city = CityManager.GetCity(playerID, cityID)
-	local cityPlots = city:GetOwnedPlots()
-	for iCityPlot, vCityPlot in ipairs(cityPlots) do
-		local cityPlotX, cityPlotY = vCityPlot:GetX(), vCityPlot:GetY()
-		local adjacentPlots = Map.GetAdjacentPlots(cityPlotX, cityPlotY)
-		for iAdjPlot, vAdjPlot in ipairs(adjacentPlots) do
-			local adjPlotIsOcean = vAdjPlot:IsWater() and not vAdjPlot:IsShallowWater()
-			local adjPlotIsOwned = vAdjPlot:IsOwned()
-			if not adjPlotIsOcean and not adjPlotIsOwned then
+	local cityX, cityY = city:GetX(), city:GetY()
 
-				-- calculate raw score
-				local score_num = 1
-				local score_den = 1
-				score_num = score_num + (vAdjPlot:IsFreshWater() and 1 or 0) -- *+1 for fresh water
-				score_num = score_num + (vAdjPlot:IsNaturalWonder() and 1 or 0) -- *+1 for natural wonder
-				score_num = score_num + (vAdjPlot:GetResourceType() >= 0 and 1 or 0) -- *+1 for resource
-				score_den = score_den + (vAdjPlot:IsImpassable() and 1 or 0) -- /+1 for impassable
-				local score = score_num / score_den
+	local visited = { [Map.GetPlotIndex(cityX, cityY)] = true }
+	local queue = { Map.GetPlot(cityX, cityY) }
+	local head = 1
+	local frontier = {}
 
-				-- do city distance calculations
-				local playerCities = PlayerManager.GetPlayer(city:GetOwner()):GetCities()
-				for iPlayerCity, vPlayerCity in playerCities:Members() do
-					local distance_multiplier = 1 + 1 / Map.GetPlotDistance(vAdjPlot:GetX(), vAdjPlot:GetY(), vPlayerCity:GetX(), vPlayerCity:GetY())
-					score = score * distance_multiplier
-				end
-
-				-- update the tile
-				if score > maxScore then
-					maxX, maxY, maxScore = vAdjPlot:GetX(), vAdjPlot:GetY(), score
+	while head <= #queue do
+		local plot = queue[head]
+		head = head + 1
+		for _, adj in ipairs(Map.GetAdjacentPlots(plot:GetX(), plot:GetY())) do
+			local adjIdx = Map.GetPlotIndex(adj:GetX(), adj:GetY())
+			if not visited[adjIdx] then
+				visited[adjIdx] = true
+				if adj:GetOwner() == playerID then
+					queue[#queue + 1] = adj
+				elseif not adj:IsOwned() and not (adj:IsWater() and not adj:IsShallowWater()) then
+					frontier[#frontier + 1] = adj
 				end
 			end
 		end
 	end
 
-	-- expand the city to the tile
-	if maxX ~= nil and maxY ~= nil then
-		WorldBuilder.CityManager():SetPlotOwner(maxX, maxY, playerID, cityID)
-		Map.GetPlot(maxX, maxY):SetOwner(playerID, cityID)
+	return frontier
+end
+
+-- Score a candidate frontier plot. Higher = more desirable.
+function ScoreFrontierPlot (plot, playerID)
+	local num = 1
+		+ (plot:IsFreshWater() and 1 or 0)
+		+ (plot:IsNaturalWonder() and 1 or 0)
+		+ (plot:GetResourceType() >= 0 and 1 or 0)
+	local den = 1 + (plot:IsImpassable() and 1 or 0)
+	local score = num / den
+
+	for _, pCity in PlayerManager.GetPlayer(playerID):GetCities():Members() do
+		local d = Map.GetPlotDistance(plot:GetX(), plot:GetY(), pCity:GetX(), pCity:GetY())
+		score = score * (1 + 1 / d)
+	end
+	return score
+end
+
+-- Expand a city by one tile. Picks the highest-scoring frontier plot and
+-- claims it for this city. Sidesteps city:GetOwnedPlots(), which doesn't
+-- reliably reflect tiles claimed via SetOwner / SetPlotOwner.
+function ExpandCity (playerID, cityID)
+	local frontier = GetCityFrontierPlots(playerID, cityID)
+
+	local bestPlot, bestScore = nil, 0
+	for _, plot in ipairs(frontier) do
+		local score = ScoreFrontierPlot(plot, playerID)
+		if score > bestScore then
+			bestPlot, bestScore = plot, score
+		end
+	end
+
+	if bestPlot ~= nil then
+		local x, y = bestPlot:GetX(), bestPlot:GetY()
+		WorldBuilder.CityManager():SetPlotOwner(x, y, playerID, cityID)
+		Map.GetPlot(x, y):SetOwner(playerID, cityID)
 
 		-- SetOwner doesn't refresh the city's workable-plot list. Try a few
 		-- known-plausible nudges; pcall so non-existent methods are silent.
-		local pCitizens = city:GetCitizens()
-		local plotIndex = Map.GetPlotIndex(maxX, maxY)
+		local pCitizens = CityManager.GetCity(playerID, cityID):GetCitizens()
+		local plotIndex = Map.GetPlotIndex(x, y)
 		pcall(function() pCitizens:SetWorkingPlot(plotIndex, false) end)
 		pcall(function() pCitizens:SetCitizenCount(pCitizens:GetCitizenCount()) end)
 		pcall(function() pCitizens:DoVerifyWorkingPlots() end)
 	end
-	print("Expansion", maxX, maxY, maxScore)
+	print("Expansion", bestPlot and bestPlot:GetX(), bestPlot and bestPlot:GetY(), bestScore, "frontier:", #frontier)
 end
 
 
