@@ -92,31 +92,34 @@ function ExpandCity (playerID, cityID)
 end
 
 
--- claim a tile for a city every time the city expandss
-Events.CityPopulationChanged.Add(function (playerID, cityID, cityPopulation)
-
-	-- Get City Coordinate ID
+-- Catch the city's tracked max pop up to its current population, running 2
+-- expansions per pop step. Idempotent: a no-op if already in sync.
+--
+-- Founding pop is assumed to be 1, so a fresh city seen at pop N expands for
+-- (N - 1) pops worth — covers Hic Sunt Dracones and other founding bonuses
+-- regardless of whether the bonus arrives before or after CityAddedToMap.
+--
+-- Edge case: cities first seen at pop > 1 due to capture or mid-save load
+-- will get free catch-up expansion. Acceptable for now.
+function CatchUpExpansion (playerID, cityID)
 	local cityPermanentID = getCityPermanentID(playerID, cityID)
-	local oldCityPop = CityMaxPopulations[cityPermanentID]
-	local cityPopDifference = cityPopulation - oldCityPop
-	if cityPopDifference > 0 then
-		CityMaxPopulations[cityPermanentID] = cityPopulation
-		print("Increased "..CityManager.GetCity(playerID, cityID):GetName().." to "..tostring(cityPopulation).." from "..tostring(oldCityPop))
-		while cityPopDifference > 0 do
-			ExpandCity(playerID, cityID)
-			ExpandCity(playerID, cityID)
-			cityPopDifference = cityPopDifference - 1
-		end
+	local currentPop = CityManager.GetCity(playerID, cityID):GetPopulation()
+	if CityMaxPopulations[cityPermanentID] == nil then
+		CityMaxPopulations[cityPermanentID] = 1
 	end
+	while CityMaxPopulations[cityPermanentID] < currentPop do
+		ExpandCity(playerID, cityID)
+		ExpandCity(playerID, cityID)
+		CityMaxPopulations[cityPermanentID] = CityMaxPopulations[cityPermanentID] + 1
+	end
+end
+
+Events.CityPopulationChanged.Add(function (playerID, cityID, cityPopulation)
+	CatchUpExpansion(playerID, cityID)
 end)
 
-
--- add a city population to the population table
 Events.CityAddedToMap.Add(function (playerID, cityID, iX, iY)
-	local cityPermanentID = getCityPermanentID(playerID, cityID)
-	local cityPop = CityManager.GetCity(playerID, cityID):GetPopulation()
-	CityMaxPopulations[cityPermanentID] = cityPop
-	print("Updated "..CityManager.GetCity(playerID, cityID):GetName().." to "..tostring(cityPop))
+	CatchUpExpansion(playerID, cityID)
 end)
 
 
