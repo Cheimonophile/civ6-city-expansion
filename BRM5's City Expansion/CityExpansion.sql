@@ -4,7 +4,7 @@
 --------------------------------------------------------------
 
 
--- Suppress Normal City Expansion
+-- Suppress vanilla culture-based tile acquisition; Lua drives expansion instead.
 UPDATE GlobalParameters
 	SET Value = 1
-	WHERE Name = 'PLOT_INFLUENCE_MAX_ACQUIRE_DISTANCE' OR Name = 'CITY_MAX_BUY_PLOT_RANGE';
+	WHERE Name = 'PLOT_INFLUENCE_MAX_ACQUIRE_DISTANCE';
