@@ -21,9 +21,17 @@
     <UpdateDatabase id="CityExpansionUpdateDatabase">
       <File priority="1">CityExpansion.sql</File>
     </UpdateDatabase>
+    <AddUserInterfaces id="PressureGrowthOverlayUI">
+      <Properties>
+        <Context>InGame</Context>
+      </Properties>
+      <File>PressureGrowthOverlay.xml</File>
+    </AddUserInterfaces>
   </InGameActions>
   <Files>
     <File>CityExpansion.sql</File>
     <File>CityExpansion.lua</File>
+    <File>PressureGrowthOverlay.xml</File>
+    <File>PressureGrowthOverlay.lua</File>
   </Files>
 </Mod>

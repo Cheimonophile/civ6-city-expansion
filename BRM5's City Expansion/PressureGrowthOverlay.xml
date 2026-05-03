@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Context Layer="WorldAnchor">
+
+	<Container ID="PressureOverlayContainer" />
+
+	<Instance Name="PressureLabelInstance">
+		<WorldAnchor ID="Anchor" Hidden="1">
+			<AlphaAnim ID="LabelAlpha" ShowOnMouseOver="0" AlphaStart="0" AlphaEnd="1" Speed="5" Function="OutSine" Cycle="Once">
+				<Stack Anchor="C,T" StackGrowth="Right" Padding="5">
+					<Label ID="TurnsLabel" Anchor="L,C" Style="FontFlair26" Color0="255,113,246,255" Color1="52,33,90,128" Color2="248,188,238,255" FontStyle="Stroke"/>
+				</Stack>
+			</AlphaAnim>
+		</WorldAnchor>
+	</Instance>
+
+</Context>
