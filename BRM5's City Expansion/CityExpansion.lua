@@ -6,6 +6,34 @@
 -- Mod Data Storage
 CityMaxPopulations = {}
 
+-- "Nearby" radius (in hexes) for the cross-player buffer rule. A candidate
+-- frontier plot is rejected if some other player has a city within this many
+-- hexes AND we don't.
+EXPANSION_BUFFER = 3
+
+function IsPlotNearPlayer (plot, playerID)
+	local pPlayer = PlayerManager.GetPlayer(playerID)
+	if pPlayer == nil or not pPlayer:IsAlive() then return false end
+	local pX, pY = plot:GetX(), plot:GetY()
+	for _, vCity in pPlayer:GetCities():Members() do
+		if Map.GetPlotDistance(pX, pY, vCity:GetX(), vCity:GetY()) <= EXPANSION_BUFFER then
+			return true
+		end
+	end
+	return false
+end
+
+-- Allowed iff we're nearby OR no foreign player is nearby.
+function IsExpansionAllowed (plot, expandingPlayerID)
+	if IsPlotNearPlayer(plot, expandingPlayerID) then return true end
+	for _, otherID in ipairs(PlayerManager.GetAliveIDs()) do
+		if otherID ~= expandingPlayerID and IsPlotNearPlayer(plot, otherID) then
+			return false
+		end
+	end
+	return true
+end
+
 -- get a city's permanent id
 function getCityPermanentID (playerID, cityID)
 	local city = CityManager.GetCity(playerID, cityID)
@@ -14,80 +42,114 @@ function getCityPermanentID (playerID, cityID)
 	return cityPermanentID
 end
 
--- Expand a city by one tile
-function ExpandCity (playerID, cityID)
-
-	-- find the max score plot
-	local maxX, maxY, maxScore = nil, nil, 0
-
+-- BFS from the city center through any plot owned by this player. Returns
+-- the list of unowned non-ocean plots bordering that walk that pass the
+-- cross-player buffer rule (see IsExpansionAllowed).
+function GetCityFrontierPlots (playerID, cityID)
 	local city = CityManager.GetCity(playerID, cityID)
-	local cityPlots = city:GetOwnedPlots()
-	for iCityPlot, vCityPlot in ipairs(cityPlots) do
-		local cityPlotX, cityPlotY = vCityPlot:GetX(), vCityPlot:GetY()
-		local adjacentPlots = Map.GetAdjacentPlots(cityPlotX, cityPlotY)
-		for iAdjPlot, vAdjPlot in ipairs(adjacentPlots) do
-			local adjPlotIsOcean = vAdjPlot:IsWater() and not vAdjPlot:IsShallowWater()
-			local adjPlotIsOwned = vAdjPlot:IsOwned()
-			if not adjPlotIsOcean and not adjPlotIsOwned then
+	local cityX, cityY = city:GetX(), city:GetY()
 
-				-- calculate raw score
-				local score_num = 1
-				local score_den = 1
-				score_num = score_num + (vAdjPlot:IsFreshWater() and 1 or 0) -- *+1 for fresh water
-				score_num = score_num + (vAdjPlot:IsNaturalWonder() and 1 or 0) -- *+1 for natural wonder
-				score_num = score_num + (vAdjPlot:GetResourceType() >= 0 and 1 or 0) -- *+1 for resource
-				score_den = score_den + (vAdjPlot:IsImpassable() and 1 or 0) -- /+1 for impassable
-				local score = score_num / score_den
+	local visited = { [Map.GetPlotIndex(cityX, cityY)] = true }
+	local queue = { Map.GetPlot(cityX, cityY) }
+	local head = 1
+	local frontier = {}
 
-				-- do city distance calculations
-				local playerCities = PlayerManager.GetPlayer(city:GetOwner()):GetCities()
-				for iPlayerCity, vPlayerCity in playerCities:Members() do
-					local distance_multiplier = 1 + 1 / Map.GetPlotDistance(vAdjPlot:GetX(), vAdjPlot:GetY(), vPlayerCity:GetX(), vPlayerCity:GetY())
-					score = score * distance_multiplier
-				end
-
-				-- update the tile
-				if score > maxScore then
-					maxX, maxY, maxScore = vAdjPlot:GetX(), vAdjPlot:GetY(), score
+	while head <= #queue do
+		local plot = queue[head]
+		head = head + 1
+		for _, adj in ipairs(Map.GetAdjacentPlots(plot:GetX(), plot:GetY())) do
+			local adjIdx = Map.GetPlotIndex(adj:GetX(), adj:GetY())
+			if not visited[adjIdx] then
+				visited[adjIdx] = true
+				if adj:GetOwner() == playerID then
+					queue[#queue + 1] = adj
+				elseif not adj:IsOwned()
+					and not (adj:IsWater() and not adj:IsShallowWater())
+					and IsExpansionAllowed(adj, playerID) then
+					frontier[#frontier + 1] = adj
 				end
 			end
 		end
 	end
 
-	-- expand the city to the tile
-	if maxX ~= nil and maxY ~= nil then
-		Map.GetPlot(maxX, maxY):SetOwner(playerID)
-		WorldBuilder.CityManager():SetPlotOwner(maxX, maxY, playerID, cityID)
+	return frontier
+end
+
+-- Score a candidate frontier plot. Higher = more desirable.
+function ScoreFrontierPlot (plot, playerID)
+	local num = 1
+		+ (plot:IsFreshWater() and 1 or 0)
+		+ (plot:IsNaturalWonder() and 1 or 0)
+		+ (plot:GetResourceType() >= 0 and 1 or 0)
+	local den = 1 + (plot:IsImpassable() and 1 or 0)
+	local score = num / den
+
+	for _, pCity in PlayerManager.GetPlayer(playerID):GetCities():Members() do
+		local d = Map.GetPlotDistance(plot:GetX(), plot:GetY(), pCity:GetX(), pCity:GetY())
+		score = score * (1 + 1 / d)
 	end
-	print("Expansion", maxX, maxY, maxScore)
+	return score
+end
+
+-- Expand a city by one tile. Picks the highest-scoring frontier plot and
+-- claims it for this city. Sidesteps city:GetOwnedPlots(), which doesn't
+-- reliably reflect tiles claimed via SetOwner / SetPlotOwner.
+function ExpandCity (playerID, cityID)
+	local frontier = GetCityFrontierPlots(playerID, cityID)
+
+	local bestPlot, bestScore = nil, 0
+	for _, plot in ipairs(frontier) do
+		local score = ScoreFrontierPlot(plot, playerID)
+		if score > bestScore then
+			bestPlot, bestScore = plot, score
+		end
+	end
+
+	if bestPlot ~= nil then
+		local x, y = bestPlot:GetX(), bestPlot:GetY()
+		WorldBuilder.CityManager():SetPlotOwner(x, y, playerID, cityID)
+		Map.GetPlot(x, y):SetOwner(playerID, cityID)
+
+		-- SetOwner doesn't refresh the city's workable-plot list. Try a few
+		-- known-plausible nudges; pcall so non-existent methods are silent.
+		local pCitizens = CityManager.GetCity(playerID, cityID):GetCitizens()
+		local plotIndex = Map.GetPlotIndex(x, y)
+		pcall(function() pCitizens:SetWorkingPlot(plotIndex, false) end)
+		pcall(function() pCitizens:SetCitizenCount(pCitizens:GetCitizenCount()) end)
+		pcall(function() pCitizens:DoVerifyWorkingPlots() end)
+	end
+	print("Expansion", bestPlot and bestPlot:GetX(), bestPlot and bestPlot:GetY(), bestScore, "frontier:", #frontier)
 end
 
 
--- claim a tile for a city every time the city expandss
-Events.CityPopulationChanged.Add(function (playerID, cityID, cityPopulation)
-
-	-- Get City Coordinate ID
+-- Catch the city's tracked max pop up to its current population, running 2
+-- expansions per pop step. Idempotent: a no-op if already in sync.
+--
+-- Founding pop is assumed to be 1, so a fresh city seen at pop N expands for
+-- (N - 1) pops worth — covers Hic Sunt Dracones and other founding bonuses
+-- regardless of whether the bonus arrives before or after CityAddedToMap.
+--
+-- Edge case: cities first seen at pop > 1 due to capture or mid-save load
+-- will get free catch-up expansion. Acceptable for now.
+function CatchUpExpansion (playerID, cityID)
 	local cityPermanentID = getCityPermanentID(playerID, cityID)
-	local oldCityPop = CityMaxPopulations[cityPermanentID]
-	local cityPopDifference = cityPopulation - oldCityPop
-	if cityPopDifference > 0 then
-		CityMaxPopulations[cityPermanentID] = cityPopulation
-		print("Increased "..CityManager.GetCity(playerID, cityID):GetName().." to "..tostring(cityPopulation).." from "..tostring(oldCityPop))
-		while cityPopDifference > 0 do
-			ExpandCity(playerID, cityID)
-			ExpandCity(playerID, cityID)
-			cityPopDifference = cityPopDifference - 1
-		end
+	local currentPop = CityManager.GetCity(playerID, cityID):GetPopulation()
+	if CityMaxPopulations[cityPermanentID] == nil then
+		CityMaxPopulations[cityPermanentID] = 1
 	end
+	while CityMaxPopulations[cityPermanentID] < currentPop do
+		ExpandCity(playerID, cityID)
+		ExpandCity(playerID, cityID)
+		CityMaxPopulations[cityPermanentID] = CityMaxPopulations[cityPermanentID] + 1
+	end
+end
+
+Events.CityPopulationChanged.Add(function (playerID, cityID, cityPopulation)
+	CatchUpExpansion(playerID, cityID)
 end)
 
-
--- add a city population to the population table
 Events.CityAddedToMap.Add(function (playerID, cityID, iX, iY)
-	local cityPermanentID = getCityPermanentID(playerID, cityID)
-	local cityPop = CityManager.GetCity(playerID, cityID):GetPopulation()
-	CityMaxPopulations[cityPermanentID] = cityPop
-	print("Updated "..CityManager.GetCity(playerID, cityID):GetName().." to "..tostring(cityPop))
+	CatchUpExpansion(playerID, cityID)
 end)
 
 
