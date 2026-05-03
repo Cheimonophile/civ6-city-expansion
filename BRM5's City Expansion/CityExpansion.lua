@@ -56,8 +56,16 @@ function ExpandCity (playerID, cityID)
 
 	-- expand the city to the tile
 	if maxX ~= nil and maxY ~= nil then
-		Map.GetPlot(maxX, maxY):SetOwner(playerID, cityID)
 		WorldBuilder.CityManager():SetPlotOwner(maxX, maxY, playerID, cityID)
+		Map.GetPlot(maxX, maxY):SetOwner(playerID, cityID)
+
+		-- SetOwner doesn't refresh the city's workable-plot list. Try a few
+		-- known-plausible nudges; pcall so non-existent methods are silent.
+		local pCitizens = city:GetCitizens()
+		local plotIndex = Map.GetPlotIndex(maxX, maxY)
+		pcall(function() pCitizens:SetWorkingPlot(plotIndex, false) end)
+		pcall(function() pCitizens:SetCitizenCount(pCitizens:GetCitizenCount()) end)
+		pcall(function() pCitizens:DoVerifyWorkingPlots() end)
 	end
 	print("Expansion", maxX, maxY, maxScore)
 end
