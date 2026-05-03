@@ -6,6 +6,34 @@
 -- Mod Data Storage
 CityMaxPopulations = {}
 
+-- "Nearby" radius (in hexes) for the cross-player buffer rule. A candidate
+-- frontier plot is rejected if some other player has a city within this many
+-- hexes AND we don't.
+EXPANSION_BUFFER = 3
+
+function IsPlotNearPlayer (plot, playerID)
+	local pPlayer = PlayerManager.GetPlayer(playerID)
+	if pPlayer == nil or not pPlayer:IsAlive() then return false end
+	local pX, pY = plot:GetX(), plot:GetY()
+	for _, vCity in pPlayer:GetCities():Members() do
+		if Map.GetPlotDistance(pX, pY, vCity:GetX(), vCity:GetY()) <= EXPANSION_BUFFER then
+			return true
+		end
+	end
+	return false
+end
+
+-- Allowed iff we're nearby OR no foreign player is nearby.
+function IsExpansionAllowed (plot, expandingPlayerID)
+	if IsPlotNearPlayer(plot, expandingPlayerID) then return true end
+	for _, otherID in ipairs(PlayerManager.GetAliveIDs()) do
+		if otherID ~= expandingPlayerID and IsPlotNearPlayer(plot, otherID) then
+			return false
+		end
+	end
+	return true
+end
+
 -- get a city's permanent id
 function getCityPermanentID (playerID, cityID)
 	local city = CityManager.GetCity(playerID, cityID)
@@ -15,8 +43,8 @@ function getCityPermanentID (playerID, cityID)
 end
 
 -- BFS from the city center through any plot owned by this player. Returns
--- the list of unowned non-ocean plots bordering that walk — the city's
--- expansion frontier.
+-- the list of unowned non-ocean plots bordering that walk that pass the
+-- cross-player buffer rule (see IsExpansionAllowed).
 function GetCityFrontierPlots (playerID, cityID)
 	local city = CityManager.GetCity(playerID, cityID)
 	local cityX, cityY = city:GetX(), city:GetY()
@@ -35,7 +63,9 @@ function GetCityFrontierPlots (playerID, cityID)
 				visited[adjIdx] = true
 				if adj:GetOwner() == playerID then
 					queue[#queue + 1] = adj
-				elseif not adj:IsOwned() and not (adj:IsWater() and not adj:IsShallowWater()) then
+				elseif not adj:IsOwned()
+					and not (adj:IsWater() and not adj:IsShallowWater())
+					and IsExpansionAllowed(adj, playerID) then
 					frontier[#frontier + 1] = adj
 				end
 			end
