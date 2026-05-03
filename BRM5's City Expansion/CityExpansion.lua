@@ -3,13 +3,14 @@
 -- DateCreated: 9/19/2023 7:13:55 PM
 --------------------------------------------------------------
 
--- Mod Data Storage
-CityMaxPopulations = {}
-
 -- "Nearby" radius (in hexes) for the cross-player buffer rule. A candidate
 -- frontier plot is rejected if some other player has a city within this many
 -- hexes AND we don't.
 EXPANSION_BUFFER = 3
+
+-- Base population a city needs to claim a tile before terrain/distance
+-- adjustments. See PressureCost.
+PRESSURE_BASE = 6
 
 function IsPlotNearPlayer (plot, playerID)
 	local pPlayer = PlayerManager.GetPlayer(playerID)
@@ -42,17 +43,57 @@ function getCityPermanentID (playerID, cityID)
 	return cityPermanentID
 end
 
--- BFS from the city center through any plot owned by this player. Returns
--- the list of unowned non-ocean plots bordering that walk that pass the
--- cross-player buffer rule (see IsExpansionAllowed).
-function GetCityFrontierPlots (playerID, cityID)
+local function FlatLand (plot)
+	return not plot:IsHills() and not plot:IsMountain()
+end
+
+local function HasResource (plot)
+	return plot:GetResourceType() >= 0
+end
+
+-- Population a city must have to absorb this plot, given its hex distance
+-- from the city center. Distance multiplier is the (d-1)th triangular
+-- number, so ring 1 is free, ring 2 = base, ring 3 = 3*base, etc.
+function PressureCost (plot, distance)
+	local base = PRESSURE_BASE
+	if plot:IsFreshWater() then base = base - 1 end
+	if FlatLand(plot) then base = base - 1 end
+	if HasResource(plot) or plot:IsNaturalWonder() then base = base - 2 end
+	if plot:IsHills() then base = base + 1 end
+	if plot:IsImpassable() then base = base * 2 end
+
+	local n = distance - 1
+	return base * (n * (n + 1) / 2)
+end
+
+-- Claim a single plot for (playerID, cityID) and nudge the citizen manager
+-- so the new tile shows up as workable. Sidesteps city:GetOwnedPlots(),
+-- which doesn't reliably reflect tiles claimed via SetOwner / SetPlotOwner.
+function ClaimPlot (playerID, cityID, plot)
+	local x, y = plot:GetX(), plot:GetY()
+	WorldBuilder.CityManager():SetPlotOwner(x, y, playerID, cityID)
+	Map.GetPlot(x, y):SetOwner(playerID, cityID)
+
+	local pCitizens = CityManager.GetCity(playerID, cityID):GetCitizens()
+	local plotIndex = Map.GetPlotIndex(x, y)
+	pcall(function() pCitizens:SetWorkingPlot(plotIndex, false) end)
+	pcall(function() pCitizens:SetCitizenCount(pCitizens:GetCitizenCount()) end)
+	pcall(function() pCitizens:DoVerifyWorkingPlots() end)
+end
+
+-- BFS from the city center through owned tiles AND through unowned tiles
+-- the given population can afford. Treating affordable plots as traversable
+-- means a single pass reaches everything claimable: e.g. an affordable
+-- ring-3 plot only becomes "frontier" once we walk through some ring-2
+-- plot, but if that ring-2 plot is also affordable the BFS handles it.
+function GetExpandablePlots (playerID, cityID, pop)
 	local city = CityManager.GetCity(playerID, cityID)
 	local cityX, cityY = city:GetX(), city:GetY()
 
 	local visited = { [Map.GetPlotIndex(cityX, cityY)] = true }
 	local queue = { Map.GetPlot(cityX, cityY) }
 	local head = 1
-	local frontier = {}
+	local claimable = {}
 
 	while head <= #queue do
 		local plot = queue[head]
@@ -66,90 +107,38 @@ function GetCityFrontierPlots (playerID, cityID)
 				elseif not adj:IsOwned()
 					and not (adj:IsWater() and not adj:IsShallowWater())
 					and IsExpansionAllowed(adj, playerID) then
-					frontier[#frontier + 1] = adj
+					local d = Map.GetPlotDistance(adj:GetX(), adj:GetY(), cityX, cityY)
+					if PressureCost(adj, d) <= pop then
+						claimable[#claimable + 1] = adj
+						queue[#queue + 1] = adj
+					end
 				end
 			end
 		end
 	end
 
-	return frontier
+	return claimable
 end
 
--- Score a candidate frontier plot. Higher = more desirable.
-function ScoreFrontierPlot (plot, playerID)
-	local num = 1
-		+ (plot:IsFreshWater() and 1 or 0)
-		+ (plot:IsNaturalWonder() and 1 or 0)
-		+ (plot:GetResourceType() >= 0 and 1 or 0)
-	local den = 1 + (plot:IsImpassable() and 1 or 0)
-	local score = num / den
-
-	for _, pCity in PlayerManager.GetPlayer(playerID):GetCities():Members() do
-		local d = Map.GetPlotDistance(plot:GetX(), plot:GetY(), pCity:GetX(), pCity:GetY())
-		score = score * (1 + 1 / d)
+-- Claim every plot the city's current population can absorb. Idempotent;
+-- safe to call on every pop change or city event.
+function ExpandCityByPressure (playerID, cityID)
+	local city = CityManager.GetCity(playerID, cityID)
+	if city == nil then return end
+	local pop = city:GetPopulation()
+	local plots = GetExpandablePlots(playerID, cityID, pop)
+	for _, plot in ipairs(plots) do
+		ClaimPlot(playerID, cityID, plot)
 	end
-	return score
-end
-
--- Expand a city by one tile. Picks the highest-scoring frontier plot and
--- claims it for this city. Sidesteps city:GetOwnedPlots(), which doesn't
--- reliably reflect tiles claimed via SetOwner / SetPlotOwner.
-function ExpandCity (playerID, cityID)
-	local frontier = GetCityFrontierPlots(playerID, cityID)
-
-	local bestPlot, bestScore = nil, 0
-	for _, plot in ipairs(frontier) do
-		local score = ScoreFrontierPlot(plot, playerID)
-		if score > bestScore then
-			bestPlot, bestScore = plot, score
-		end
-	end
-
-	if bestPlot ~= nil then
-		local x, y = bestPlot:GetX(), bestPlot:GetY()
-		WorldBuilder.CityManager():SetPlotOwner(x, y, playerID, cityID)
-		Map.GetPlot(x, y):SetOwner(playerID, cityID)
-
-		-- SetOwner doesn't refresh the city's workable-plot list. Try a few
-		-- known-plausible nudges; pcall so non-existent methods are silent.
-		local pCitizens = CityManager.GetCity(playerID, cityID):GetCitizens()
-		local plotIndex = Map.GetPlotIndex(x, y)
-		pcall(function() pCitizens:SetWorkingPlot(plotIndex, false) end)
-		pcall(function() pCitizens:SetCitizenCount(pCitizens:GetCitizenCount()) end)
-		pcall(function() pCitizens:DoVerifyWorkingPlots() end)
-	end
-	print("Expansion", bestPlot and bestPlot:GetX(), bestPlot and bestPlot:GetY(), bestScore, "frontier:", #frontier)
-end
-
-
--- Catch the city's tracked max pop up to its current population, running 2
--- expansions per pop step. Idempotent: a no-op if already in sync.
---
--- Founding pop is assumed to be 1, so a fresh city seen at pop N expands for
--- (N - 1) pops worth — covers Hic Sunt Dracones and other founding bonuses
--- regardless of whether the bonus arrives before or after CityAddedToMap.
---
--- Edge case: cities first seen at pop > 1 due to capture or mid-save load
--- will get free catch-up expansion. Acceptable for now.
-function CatchUpExpansion (playerID, cityID)
-	local cityPermanentID = getCityPermanentID(playerID, cityID)
-	local currentPop = CityManager.GetCity(playerID, cityID):GetPopulation()
-	if CityMaxPopulations[cityPermanentID] == nil then
-		CityMaxPopulations[cityPermanentID] = 1
-	end
-	while CityMaxPopulations[cityPermanentID] < currentPop do
-		ExpandCity(playerID, cityID)
-		ExpandCity(playerID, cityID)
-		CityMaxPopulations[cityPermanentID] = CityMaxPopulations[cityPermanentID] + 1
-	end
+	print("Expansion pop=", pop, "claimed=", #plots)
 end
 
 Events.CityPopulationChanged.Add(function (playerID, cityID, cityPopulation)
-	CatchUpExpansion(playerID, cityID)
+	ExpandCityByPressure(playerID, cityID)
 end)
 
 Events.CityAddedToMap.Add(function (playerID, cityID, iX, iY)
-	CatchUpExpansion(playerID, cityID)
+	ExpandCityByPressure(playerID, cityID)
 end)
 
 
