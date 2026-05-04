@@ -1,115 +1,155 @@
 -- Citizen-management overlay: while the player is in the manage-citizens
--- screen for a city, paint a hex on every plot that city will absorb under
--- pressure-based expansion, labelled with approximate turns. UI context runs
--- in a separate Lua VM from CityExpansion.lua, so the pressure math is
--- mirrored here. Keep these constants and helpers in sync.
+-- screen for a city, paint a hex on every nearby unowned plot the player is
+-- pressuring, labelled with approximate turns until the plot flips. UI
+-- context runs in a separate Lua VM from CityExpansion.lua, so the threshold
+-- formula and the pressure-state serialization shape are mirrored here —
+-- keep PRESSURE_STATE_KEY, the terrain modifiers, and the (de)serializer in
+-- sync between the two files.
 include("InstanceManager")
 
-local EXPANSION_BUFFER = 3
-local PRESSURE_BASE    = 6
-local LOOK_AHEAD_POPS  = 5
+local PRESSURE_STATE_KEY = "BRM5_PressureState_v1"
 
-local m_PurchasePlot   = UILens.CreateLensLayerHash("Purchase_Plot")
-local m_LabelIM        -- InstanceManager, set in OnInit
-local m_DrawnPlots     = {}
-local m_ActiveInstances = {}
+local m_PurchasePlot     = UILens.CreateLensLayerHash("Purchase_Plot")
+local m_LabelIM          -- InstanceManager, set in OnInit
+local m_DrawnPlots       = {}
+local m_ActiveInstances  = {}
 local m_bLoadScreenClose = false
 
 -- ===========================================================================
--- Pressure logic — keep in sync with CityExpansion.lua
+-- Pressure mirror — keep in sync with CityExpansion.lua
 -- ===========================================================================
-local function FlatLand(plot)
-	return not plot:IsHills() and not plot:IsMountain()
+local function TerrainIndex (name)
+	local row = GameInfo.Terrains[name]
+	return row and row.Index or -1
+end
+local g_TERRAIN_TUNDRA = TerrainIndex("TERRAIN_TUNDRA")
+local g_TERRAIN_DESERT = TerrainIndex("TERRAIN_DESERT")
+local g_TERRAIN_SNOW   = TerrainIndex("TERRAIN_SNOW")
+
+local function ComputeBasePressure ()
+	local row  = GameInfo.GlobalParameters["CULTURE_COST_FIRST_PLOT"]
+	local base = (row and tonumber(row.Value)) or 10
+	local speed = GameInfo.GameSpeeds[GameConfiguration.GetGameSpeedType()]
+	local mult  = (speed and speed.CostMultiplier) or 100
+	return base * mult / 100
+end
+local g_BasePressure = ComputeBasePressure()
+
+local function Threshold (plot)
+	local m = 1.0
+	if plot:IsImpassable()         then m = m * 2.0 end
+	if plot:IsHills()              then m = m * 1.2 end
+	if plot:IsFreshWater()         then m = m * 0.8 end
+	if plot:GetResourceType() >= 0 then m = m * 0.8 end
+	local t = plot:GetTerrainType()
+	if t == g_TERRAIN_TUNDRA       then m = m * 1.2 end
+	if t == g_TERRAIN_DESERT       then m = m * 1.2 end
+	if t == g_TERRAIN_SNOW         then m = m * 1.4 end
+	return g_BasePressure * m
 end
 
-local function HasResource(plot)
-	return plot:GetResourceType() >= 0
+local function Deserialize (s)
+	if s == nil or s == "" then return {} end
+	local f = loadstring("return " .. s)
+	if f == nil then return {} end
+	local ok, val = pcall(f)
+	if not ok or type(val) ~= "table" then return {} end
+	return val
 end
 
-local function PressureCost(plot, distance)
-	local base = PRESSURE_BASE
-	if plot:IsFreshWater() then base = base - 1 end
-	if FlatLand(plot) then base = base - 1 end
-	if HasResource(plot) or plot:IsNaturalWonder() then base = base - 2 end
-	if plot:IsHills() then base = base + 1 end
-	if plot:IsImpassable() then base = base * 2 end
-	local n = distance - 1
-	return base * (n * (n + 1) / 2)
-end
-
-local function IsPlotNearPlayer(plot, playerID)
-	local pPlayer = Players[playerID]
-	if pPlayer == nil or not pPlayer:IsAlive() then return false end
-	local pX, pY = plot:GetX(), plot:GetY()
-	for _, vCity in pPlayer:GetCities():Members() do
-		if Map.GetPlotDistance(pX, pY, vCity:GetX(), vCity:GetY()) <= EXPANSION_BUFFER then
-			return true
-		end
+-- True iff `plot` is owned by playerID's city `cityID`. Civ VI's
+-- Plot:GetOwningCityID is the canonical answer when available; otherwise
+-- fall back to "the player's closest city to this plot is the target city".
+local function PlotBelongsToCity (plot, playerID, cityID, cityX, cityY)
+	if plot:GetOwner() ~= playerID then return false end
+	local ok, owningID = pcall(function () return plot:GetOwningCityID() end)
+	if ok and owningID ~= nil and owningID >= 0 then
+		return owningID == cityID
 	end
-	return false
-end
-
-local function IsExpansionAllowed(plot, expandingPlayerID)
-	if IsPlotNearPlayer(plot, expandingPlayerID) then return true end
-	for _, otherID in ipairs(PlayerManager.GetAliveIDs()) do
-		if otherID ~= expandingPlayerID and IsPlotNearPlayer(plot, otherID) then
-			return false
+	local pPlayer = Players[playerID]
+	if pPlayer == nil then return false end
+	local px, py = plot:GetX(), plot:GetY()
+	local thisDist = Map.GetPlotDistance(px, py, cityX, cityY)
+	for _, vCity in pPlayer:GetCities():Members() do
+		if vCity:GetID() ~= cityID then
+			if Map.GetPlotDistance(px, py, vCity:GetX(), vCity:GetY()) < thisDist then
+				return false
+			end
 		end
 	end
 	return true
 end
 
--- Mirror of CityExpansion.lua:GetExpandablePlots — BFS from city center
--- through owned and through unowned-but-affordable plots at the given pop.
-local function ProjectClaimable(playerID, cityID, pop)
-	local city = CityManager.GetCity(playerID, cityID)
-	if city == nil then return {} end
-	local cityX, cityY = city:GetX(), city:GetY()
-	local visited = { [Map.GetPlotIndex(cityX, cityY)] = true }
-	local queue = { Map.GetPlot(cityX, cityY) }
-	local head = 1
-	local claimable = {}
+-- BFS through the selected city's own owned plots and collect every unowned
+-- non-deep-water neighbour as the city's frontier. For each frontier plot,
+-- project turns until this player's pressure (current accumulated + per-turn
+-- rate from all the player's cities) clears the plot's threshold. Plots
+-- with no state entry are treated as zero pressure so the overlay populates
+-- immediately on a freshly founded city.
+local function BuildPlotTurnsMap (playerID, cityID)
+	local pCity = CityManager.GetCity(playerID, cityID)
+	if pCity == nil then return {} end
+	local cityX, cityY = pCity:GetX(), pCity:GetY()
+
+	local centerIdx = Map.GetPlotIndex(cityX, cityY)
+	local visited   = { [centerIdx] = true }
+	local queue     = { Map.GetPlot(cityX, cityY) }
+	local head      = 1
+	local frontier  = {}
+
 	while head <= #queue do
 		local plot = queue[head]; head = head + 1
 		for _, adj in ipairs(Map.GetAdjacentPlots(plot:GetX(), plot:GetY())) do
 			local adjIdx = Map.GetPlotIndex(adj:GetX(), adj:GetY())
 			if not visited[adjIdx] then
 				visited[adjIdx] = true
-				if adj:GetOwner() == playerID then
+				if PlotBelongsToCity(adj, playerID, cityID, cityX, cityY) then
 					queue[#queue + 1] = adj
 				elseif not adj:IsOwned()
-					and not (adj:IsWater() and not adj:IsShallowWater())
-					and IsExpansionAllowed(adj, playerID) then
-					local d = Map.GetPlotDistance(adj:GetX(), adj:GetY(), cityX, cityY)
-					if PressureCost(adj, d) <= pop then
-						claimable[#claimable + 1] = adj
-						queue[#queue + 1] = adj
-					end
+					and not (adj:IsWater() and not adj:IsShallowWater()) then
+					frontier[adjIdx] = adj
 				end
 			end
 		end
 	end
-	return claimable
-end
 
--- For each plot the city will eventually claim, find the smallest pop offset
--- (>= 1) at which it first becomes reachable. Returns { plotIndex = popsAway }.
-local function BuildPlotPopMap(playerID, cityID, currentPop)
-	local seen = {}
-	for offset = 1, LOOK_AHEAD_POPS do
-		local pop = currentPop + offset
-		for _, plot in ipairs(ProjectClaimable(playerID, cityID, pop)) do
-			local idx = Map.GetPlotIndex(plot:GetX(), plot:GetY())
-			if seen[idx] == nil then seen[idx] = offset end
+	local state = ExposedMembers.BRM5_PressureState
+	if state == nil then
+		state = Deserialize(Game:GetProperty(PRESSURE_STATE_KEY))
+	end
+	local pPlayer = Players[playerID]
+	if pPlayer == nil then return {} end
+
+	local cities = {}
+	for _, vCity in pPlayer:GetCities():Members() do
+		cities[#cities + 1] = { x = vCity:GetX(), y = vCity:GetY(), pop = vCity:GetPopulation() }
+	end
+
+	local result = {}
+	for plotIdx, plot in pairs(frontier) do
+		local px, py    = plot:GetX(), plot:GetY()
+		local plotState = state[plotIdx] or {}
+		local current   = plotState[playerID] or 0
+		local rate      = 0
+		for _, c in ipairs(cities) do
+			local cd = Map.GetPlotDistance(c.x, c.y, px, py)
+			if cd < 1 then cd = 1 end
+			rate = rate + (c.pop / cd)
+		end
+		if rate > 0 then
+			local remaining = Threshold(plot) - current
+			if remaining < 0 then remaining = 0 end
+			result[plotIdx] = math.ceil(remaining / rate)
 		end
 	end
-	return seen
+
+	return result
 end
 
 -- ===========================================================================
 -- Overlay rendering
 -- ===========================================================================
-local function ClearOverlay()
+local function ClearOverlay ()
 	for plotIdx, _ in pairs(m_DrawnPlots) do
 		UILens.ClearHex(m_PurchasePlot, plotIdx)
 	end
@@ -122,21 +162,16 @@ local function ClearOverlay()
 	m_ActiveInstances = {}
 end
 
-local function ShowOverlayForCity(pCity)
+local function ShowOverlayForCity (pCity)
 	ClearOverlay()
 	if pCity == nil then return end
 
 	local iPlayer = pCity:GetOwner()
-	local iCity   = pCity:GetID()
 	if iPlayer ~= Game.GetLocalPlayer() then return end
 
-	local currentPop  = pCity:GetPopulation()
-	local growth      = pCity:GetGrowth()
-	local turnsPerPop = growth and growth:GetTurnsUntilGrowth() or -1
+	local plotMap = BuildPlotTurnsMap(iPlayer, pCity:GetID())
 
-	local plotMap = BuildPlotPopMap(iPlayer, iCity, currentPop)
-
-	for plotIdx, popsAway in pairs(plotMap) do
+	for plotIdx, turns in pairs(plotMap) do
 		UILens.SetLayerGrowthHex(m_PurchasePlot, iPlayer, plotIdx, 1, "GrowthHexBG")
 		m_DrawnPlots[plotIdx] = true
 
@@ -144,14 +179,7 @@ local function ShowOverlayForCity(pCity)
 		local plotX, plotY = Map.GetPlotLocation(plotIdx)
 		local worldX, worldY, worldZ = UI.GridToWorld(plotX, plotY)
 		inst.Anchor:SetWorldPositionVal(worldX, worldY + 15, worldZ)
-
-		local labelText
-		if turnsPerPop and turnsPerPop > 0 then
-			labelText = "~" .. tostring(turnsPerPop * popsAway)
-		else
-			labelText = "?"
-		end
-		inst.TurnsLabel:SetText(labelText)
+		inst.TurnsLabel:SetText(tostring(turns))
 
 		inst.Anchor:SetHide(false)
 		inst.LabelAlpha:SetToBeginning()
@@ -161,7 +189,7 @@ local function ShowOverlayForCity(pCity)
 	end
 end
 
-local function OnInterfaceModeChanged(eOldMode, eNewMode)
+local function OnInterfaceModeChanged (eOldMode, eNewMode)
 	if eOldMode == InterfaceModeTypes.CITY_MANAGEMENT then
 		ClearOverlay()
 	end
@@ -170,10 +198,16 @@ local function OnInterfaceModeChanged(eOldMode, eNewMode)
 	end
 end
 
+local function OnTurnRefresh ()
+	if UI.GetInterfaceMode() == InterfaceModeTypes.CITY_MANAGEMENT then
+		ShowOverlayForCity(UI.GetHeadSelectedCity())
+	end
+end
+
 -- ===========================================================================
 -- Lifecycle
 -- ===========================================================================
-function OnInit(bIsReload)
+function OnInit (bIsReload)
 	if not ContextPtr:LookUpControl("/InGame/WorldViewControls") then
 		Events.LoadScreenClose.Add(OnInit)
 		m_bLoadScreenClose = true
@@ -183,6 +217,8 @@ function OnInit(bIsReload)
 	m_LabelIM = InstanceManager:new("PressureLabelInstance", "Anchor", Controls.PressureOverlayContainer)
 
 	Events.InterfaceModeChanged.Add(OnInterfaceModeChanged)
+	Events.LocalPlayerTurnBegin.Add(OnTurnRefresh)
+	Events.LocalPlayerTurnEnd.Add(OnTurnRefresh)
 
 	local pWorldView = ContextPtr:LookUpControl("/InGame/WorldViewControls")
 	ContextPtr:ChangeParent(pWorldView)
@@ -192,14 +228,16 @@ function OnInit(bIsReload)
 	end
 end
 
-function OnShutdown()
+function OnShutdown ()
 	if m_bLoadScreenClose then
 		Events.LoadScreenClose.Remove(OnInit)
 	end
 	Events.InterfaceModeChanged.Remove(OnInterfaceModeChanged)
+	Events.LocalPlayerTurnBegin.Remove(OnTurnRefresh)
+	Events.LocalPlayerTurnEnd.Remove(OnTurnRefresh)
 end
 
-function Initialize()
+function Initialize ()
 	ContextPtr:SetInitHandler(OnInit)
 	ContextPtr:SetShutdown(OnShutdown)
 	ContextPtr:SetHide(false)
