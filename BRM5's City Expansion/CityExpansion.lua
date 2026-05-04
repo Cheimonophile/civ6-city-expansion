@@ -35,6 +35,13 @@ local function ComputeBasePressure ()
 end
 local g_BasePressure = ComputeBasePressure()
 
+-- 6 × Tᵈ — the number of hexes within a ring of radius d. Used as the
+-- distance divisor so a city's pressure on a tile falls off with the size
+-- of the territory it would have to "saturate" to reach that distance.
+local function DistanceDivisor (d)
+	return 6 * d * (d + 1) / 2
+end
+
 local function Threshold (plot)
 	local m = 1.0
 	if plot:IsImpassable()                                 then m = m * 2.0  end
@@ -179,7 +186,7 @@ local function ApplyPressureTurn ()
 				for _, vCity in pPlayer:GetCities():Members() do
 					local d = Map.GetPlotDistance(vCity:GetX(), vCity:GetY(), plotX, plotY)
 					if d < 1 then d = 1 end
-					sum = sum + (vCity:GetPopulation() / (6 * d * (d + 1) / 2))
+					sum = sum + (vCity:GetPopulation() / DistanceDivisor(d))
 				end
 				plotState[playerID] = sum
 			end

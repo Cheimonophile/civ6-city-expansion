@@ -35,6 +35,10 @@ local function ComputeBasePressure ()
 end
 local g_BasePressure = ComputeBasePressure()
 
+local function DistanceDivisor (d)
+	return 6 * d * (d + 1) / 2
+end
+
 local function Threshold (plot)
 	local m = 1.0
 	if plot:IsImpassable()                                 then m = m * 2.0  end
@@ -136,7 +140,7 @@ local function BuildPlotTurnsMap (playerID, cityID)
 		for _, c in ipairs(cities) do
 			local cd = Map.GetPlotDistance(c.x, c.y, px, py)
 			if cd < 1 then cd = 1 end
-			rate = rate + (c.pop / (6 * cd * (cd + 1) / 2))
+			rate = rate + (c.pop / DistanceDivisor(cd))
 		end
 		if rate > 0 then
 			local remaining = Threshold(plot) - current
