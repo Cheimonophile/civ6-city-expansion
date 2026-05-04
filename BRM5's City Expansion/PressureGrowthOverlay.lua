@@ -31,20 +31,21 @@ local function ComputeBasePressure ()
 	local base = (row and tonumber(row.Value)) or 10
 	local speed = GameInfo.GameSpeeds[GameConfiguration.GetGameSpeedType()]
 	local mult  = (speed and speed.CostMultiplier) or 100
-	return 6 * base * mult / 100
+	return base * mult / 100
 end
 local g_BasePressure = ComputeBasePressure()
 
 local function Threshold (plot)
 	local m = 1.0
-	if plot:IsImpassable()         then m = m * 2.0 end
-	if plot:IsHills()              then m = m * 1.2 end
-	if plot:IsFreshWater()         then m = m * 0.8 end
-	if plot:GetResourceType() >= 0 then m = m * 0.8 end
+	if plot:IsImpassable()                                 then m = m * 2.0  end
+	if plot:IsHills()                                      then m = m * 1.2  end
+	if not plot:IsHills() and not plot:IsMountain()        then m = m * 0.75 end
+	if plot:IsFreshWater()                                 then m = m * 0.75 end
+	if plot:GetResourceType() >= 0 or plot:IsNaturalWonder() then m = m * 0.5  end
 	local t = plot:GetTerrainType()
-	if t == g_TERRAIN_TUNDRA       then m = m * 1.2 end
-	if t == g_TERRAIN_DESERT       then m = m * 1.2 end
-	if t == g_TERRAIN_SNOW         then m = m * 1.4 end
+	if t == g_TERRAIN_TUNDRA                               then m = m * 1.2  end
+	if t == g_TERRAIN_DESERT                               then m = m * 1.2  end
+	if t == g_TERRAIN_SNOW                                 then m = m * 1.4  end
 	return g_BasePressure * m
 end
 
@@ -135,7 +136,7 @@ local function BuildPlotTurnsMap (playerID, cityID)
 		for _, c in ipairs(cities) do
 			local cd = Map.GetPlotDistance(c.x, c.y, px, py)
 			if cd < 1 then cd = 1 end
-			rate = rate + (c.pop / cd)
+			rate = rate + (c.pop / (6 * cd * (cd + 1) / 2))
 		end
 		if rate > 0 then
 			local remaining = Threshold(plot) - current
