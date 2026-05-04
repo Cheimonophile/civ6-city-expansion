@@ -31,7 +31,7 @@ local function ComputeBasePressure ()
 	local base = (row and tonumber(row.Value)) or 10
 	local speed = GameInfo.GameSpeeds[GameConfiguration.GetGameSpeedType()]
 	local mult  = (speed and speed.CostMultiplier) or 100
-	return base * mult / 100
+	return 6 * base * mult / 100
 end
 local g_BasePressure = ComputeBasePressure()
 
