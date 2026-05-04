@@ -129,8 +129,9 @@ local function BuildPlotTurnsMap (playerID, cityID)
 	for plotIdx, plot in pairs(frontier) do
 		local px, py    = plot:GetX(), plot:GetY()
 		local plotState = state[plotIdx] or {}
-		local current   = plotState[playerID] or 0
-		local rate      = 0
+
+		local current = plotState[playerID] or 0
+		local rate    = 0
 		for _, c in ipairs(cities) do
 			local cd = Map.GetPlotDistance(c.x, c.y, px, py)
 			if cd < 1 then cd = 1 end
