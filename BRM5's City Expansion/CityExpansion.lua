@@ -14,6 +14,12 @@
 
 PRESSURE_STATE_KEY = "BRM5_PressureState_v1"
 
+-- "Polite" buffer rule (ported from the pre-pressure expansion): a player
+-- may only expand into a plot if either they already have a city within
+-- this many hexes of the plot, or no other player does. Keep in sync with
+-- PressureGrowthOverlay.lua so the overlay projection matches.
+local EXPANSION_BUFFER = 3
+
 local g_lastTurnProcessed = -1
 
 -- ---- terrain index lookup -----------------------------------------------
@@ -95,6 +101,31 @@ local function SaveState ()
 	end
 end
 
+local function PlayerHasCityWithin (plot, playerID, dist)
+	local pPlayer = Players[playerID]
+	if pPlayer == nil or not pPlayer:IsAlive() then return false end
+	local px, py = plot:GetX(), plot:GetY()
+	for _, vCity in pPlayer:GetCities():Members() do
+		if Map.GetPlotDistance(px, py, vCity:GetX(), vCity:GetY()) <= dist then
+			return true
+		end
+	end
+	return false
+end
+
+local function IsExpansionAllowed (plot, expandingPlayerID)
+	if PlayerHasCityWithin(plot, expandingPlayerID, EXPANSION_BUFFER) then
+		return true
+	end
+	for _, otherID in ipairs(PlayerManager.GetAliveIDs()) do
+		if otherID ~= expandingPlayerID
+			and PlayerHasCityWithin(plot, otherID, EXPANSION_BUFFER) then
+			return false
+		end
+	end
+	return true
+end
+
 -- Resolve which of the owning player's cities owns this plot. Civ VI exposes
 -- Plot:GetOwningCityID in some builds; fall back to nearest-city otherwise.
 local function GetOwningCityID (plot)
@@ -145,9 +176,12 @@ local function BuildFrontier ()
 					if pPlayer ~= nil and pPlayer:IsAlive() and not pPlayer:IsBarbarian() then
 						local cityID = GetOwningCityID(adj)
 						if cityID ~= nil then
-							borders = borders or {}
-							borders[owner] = borders[owner] or {}
-							borders[owner][cityID] = true
+							local alreadyAdded = borders ~= nil and borders[owner] ~= nil
+							if alreadyAdded or IsExpansionAllowed(plot, owner) then
+								borders = borders or {}
+								borders[owner] = borders[owner] or {}
+								borders[owner][cityID] = true
+							end
 						end
 					end
 				end
@@ -200,7 +234,7 @@ local function ApplyPressureTurn ()
 
 		local winnerID, winnerPressure = nil, -1
 		for playerID, pressure in pairs(plotState) do
-			if pressure >= threshold then
+			if pressure >= threshold and info.borderingCities[playerID] ~= nil then
 				if pressure > winnerPressure
 					or (pressure == winnerPressure and (winnerID == nil or playerID < winnerID)) then
 					winnerID, winnerPressure = playerID, pressure

@@ -9,6 +9,11 @@ include("InstanceManager")
 
 local PRESSURE_STATE_KEY = "BRM5_PressureState_v1"
 
+-- Mirror of CityExpansion.lua: a player may only expand into a plot if
+-- they have a city within EXPANSION_BUFFER hexes of it, or no other
+-- player does. Keep in sync with the gameplay file.
+local EXPANSION_BUFFER = 3
+
 local m_PurchasePlot     = UILens.CreateLensLayerHash("Purchase_Plot")
 local m_LabelIM          -- InstanceManager, set in OnInit
 local m_DrawnPlots       = {}
@@ -51,6 +56,31 @@ local function Threshold (plot)
 	if t == g_TERRAIN_DESERT                               then m = m * 1.2  end
 	if t == g_TERRAIN_SNOW                                 then m = m * 1.4  end
 	return g_BasePressure * m
+end
+
+local function PlayerHasCityWithin (plot, playerID, dist)
+	local pPlayer = Players[playerID]
+	if pPlayer == nil or not pPlayer:IsAlive() then return false end
+	local px, py = plot:GetX(), plot:GetY()
+	for _, vCity in pPlayer:GetCities():Members() do
+		if Map.GetPlotDistance(px, py, vCity:GetX(), vCity:GetY()) <= dist then
+			return true
+		end
+	end
+	return false
+end
+
+local function IsExpansionAllowed (plot, expandingPlayerID)
+	if PlayerHasCityWithin(plot, expandingPlayerID, EXPANSION_BUFFER) then
+		return true
+	end
+	for _, otherID in ipairs(PlayerManager.GetAliveIDs()) do
+		if otherID ~= expandingPlayerID
+			and PlayerHasCityWithin(plot, otherID, EXPANSION_BUFFER) then
+			return false
+		end
+	end
+	return true
 end
 
 local function Deserialize (s)
@@ -132,20 +162,22 @@ local function BuildPlotTurnsMap (playerID, cityID)
 
 	local result = {}
 	for plotIdx, plot in pairs(frontier) do
-		local px, py    = plot:GetX(), plot:GetY()
-		local plotState = state[plotIdx] or {}
+		if IsExpansionAllowed(plot, playerID) then
+			local px, py    = plot:GetX(), plot:GetY()
+			local plotState = state[plotIdx] or {}
 
-		local current = plotState[playerID] or 0
-		local rate    = 0
-		for _, c in ipairs(cities) do
-			local cd = Map.GetPlotDistance(c.x, c.y, px, py)
-			if cd < 1 then cd = 1 end
-			rate = rate + (c.pop / DistanceDivisor(cd))
-		end
-		if rate > 0 then
-			local remaining = Threshold(plot) - current
-			if remaining < 0 then remaining = 0 end
-			result[plotIdx] = math.ceil(remaining / rate)
+			local current = plotState[playerID] or 0
+			local rate    = 0
+			for _, c in ipairs(cities) do
+				local cd = Map.GetPlotDistance(c.x, c.y, px, py)
+				if cd < 1 then cd = 1 end
+				rate = rate + (c.pop / DistanceDivisor(cd))
+			end
+			if rate > 0 then
+				local remaining = Threshold(plot) - current
+				if remaining < 0 then remaining = 0 end
+				result[plotIdx] = math.ceil(remaining / rate)
+			end
 		end
 	end
 
